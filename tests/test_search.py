@@ -1,5 +1,6 @@
 import sys
 import decimal
+import operator
 from tests import unittest, OrderedDict
 
 import jmespath
@@ -62,3 +63,92 @@ class TestPythonSpecificCases(unittest.TestCase):
         result = decimal.Decimal('3')
         self.assertEqual(jmespath.search('[?a >= `1`].a', [{'a': result}]),
                          [result])
+
+
+class TestMixedTypeOrderingComparisons(unittest.TestCase):
+    # Ordering comparisons between a number and a non-number (e.g. a
+    # string) must yield None instead of raising the language's native
+    # type comparison error.  This must hold both for top-level
+    # comparisons and for comparisons inside filter projections.
+    ORDERING_OPS = {
+        '<': operator.lt,
+        '>': operator.gt,
+        '<=': operator.le,
+        '>=': operator.ge,
+    }
+
+    def test_mixed_number_and_string_returns_none_top_level(self):
+        for op in self.ORDERING_OPS:
+            for expression in ('a %s b' % op, 'b %s a' % op):
+                result = jmespath.search(
+                    expression, {'a': 1, 'b': '2'})
+                self.assertIsNone(
+                    result,
+                    'Expected None for %r, got %r' % (expression, result))
+
+    def test_mixed_number_and_string_returns_none_in_filter(self):
+        data = [{'a': 1, 'b': '2'}, {'a': 3, 'b': 4}]
+        for op, op_func in self.ORDERING_OPS.items():
+            for expression, left, right in (
+                    ('[?a %s b].a' % op, 3, 4),
+                    ('[?b %s a].a' % op, 4, 3)):
+                result = jmespath.search(expression, data)
+                # The mixed-type element yields None (falsy) and is
+                # filtered out; the number/number element still compares.
+                expected = [3] if op_func(left, right) else []
+                self.assertEqual(
+                    result, expected,
+                    'Unexpected result for %r: %r' % (expression, result))
+
+    def test_mixed_number_and_string_literal_returns_none(self):
+        for op in self.ORDERING_OPS:
+            for expression in ('a %s `1`' % op, '`1` %s a' % op):
+                result = jmespath.search(expression, {'a': 'foo'})
+                self.assertIsNone(
+                    result,
+                    'Expected None for %r, got %r' % (expression, result))
+
+    def test_mixed_number_and_string_literal_in_filter(self):
+        data = [{'a': 'foo'}, {'a': 2}]
+        for op, op_func in self.ORDERING_OPS.items():
+            for expression, left, right in (
+                    ('[?a %s `1`].a' % op, 2, 1),
+                    ('[?`1` %s a].a' % op, 1, 2)):
+                result = jmespath.search(expression, data)
+                expected = [2] if op_func(left, right) else []
+                self.assertEqual(
+                    result, expected,
+                    'Unexpected result for %r: %r' % (expression, result))
+
+    def test_string_string_comparison_still_works(self):
+        for op, expected in (('<', True), ('>', False),
+                             ('<=', True), ('>=', False)):
+            self.assertEqual(
+                jmespath.search('a %s b' % op,
+                                {'a': '2016', 'b': '2017'}),
+                expected)
+        # Same behavior inside a filter projection.
+        data = [{'a': '2016'}, {'a': '2018'}]
+        self.assertEqual(
+            jmespath.search('[?a < `"2017"`].a', data), ['2016'])
+
+    def test_number_number_comparison_still_works(self):
+        for op, expected in (('<', True), ('>', False),
+                             ('<=', True), ('>=', False)):
+            self.assertEqual(
+                jmespath.search('a %s b' % op, {'a': 1, 'b': 2}), expected)
+        self.assertEqual(
+            jmespath.search('[?a >= `1`].a', [{'a': 1}, {'a': 0}]), [1])
+
+    def test_bool_number_comparison_still_returns_none(self):
+        # Pre-existing behavior: booleans are not comparable to numbers
+        # and quietly yield None.  This must not regress.
+        for op in self.ORDERING_OPS:
+            for expression in ('a %s b' % op, 'b %s a' % op):
+                self.assertIsNone(
+                    jmespath.search(expression, {'a': True, 'b': 1}))
+        data = [{'a': True}, {'a': 2}]
+        for op, op_func in self.ORDERING_OPS.items():
+            expected = [2] if op_func(2, 1) else []
+            self.assertEqual(
+                jmespath.search('[?a %s `1`].a' % op, data), expected)

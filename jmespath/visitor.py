@@ -151,9 +151,15 @@ class TreeInterpreter(Visitor):
             # will yield a None value.
             left = self.visit(node['children'][0], value)
             right = self.visit(node['children'][1], value)
-            num_types = (int, float)
             if not (_is_comparable(left) and
                     _is_comparable(right)):
+                return None
+            if _is_actual_number(left) != _is_actual_number(right):
+                # Mixed number/string operands are not comparable.
+                # Rather than letting the language's native type
+                # comparison error propagate, yield a None value,
+                # consistent with how other non-comparable types
+                # (e.g. bool vs. number) are handled.
                 return None
             return comparator_func(left, right)
 
